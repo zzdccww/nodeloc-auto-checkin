@@ -144,12 +144,13 @@ class NodeLocBrowser:
     
     
     
+    
     def try_checkin(self) -> bool:
         logger.info("尝试执行签到...")
         self.page.get(BASE_URL + "/")
         time.sleep(2)
     
-        # 构建候选选择器
+        # 1) 构建选择器列表（XPath + CSS）
         selectors = []
         if CHECKIN_SELECTOR:
             selectors.extend([s.strip() for s in CHECKIN_SELECTOR.split(",") if s.strip()])
@@ -170,7 +171,7 @@ class NodeLocBrowser:
     
         logger.debug(f"签到按钮候选选择器：{selectors}")
     
-        # 工具：提升 svg → button
+        # 工具：svg → button
         def promote(ele):
             try:
                 if ele.tag.lower() == "svg":
@@ -182,7 +183,7 @@ class NodeLocBrowser:
                 pass
             return ele
     
-        # 工具：检查已签到
+        # 工具：是否已签到
         def is_checked_in(ele):
             try:
                 cls = ele.attr("class") or ""
@@ -190,7 +191,7 @@ class NodeLocBrowser:
             except:
                 return False
     
-        # 先在主 DOM 查找
+        # 核心：在指定 page（主 DOM 或 iframe 内）搜索签到按钮
         def search_in(page):
             for css in selectors:
                 ele = None
@@ -216,38 +217,49 @@ class NodeLocBrowser:
                     logger.debug(f"点击失败：{e}")
                     continue
     
-                # 再检查一次
+                # 再检查是否状态变化
                 try:
-                    post = page.ele("button.checkin-button")
-                    if post and is_checked_in(post):
-                        logger.success("签到成功（检查后确认）")
+                    after = page.ele("button.checkin-button")
+                    if after and is_checked_in(after):
+                        logger.success("签到成功（点击后检测到 checked-in）")
                         return True
                 except:
                     pass
     
             return False
     
-        # 第一阶段：主 DOM
+        # 2）首先在主 DOM 查找
         if search_in(self.page):
             return True
     
         logger.info("主 DOM 未找到，开始扫描 iframe...")
     
-        # 第二阶段：iframe 遍历
-        for f in self.page.frames:
-            if search_in(f):
-                return True
+        # 3）遍历 iframe（DrissionPage 正确写法）
+        def search_iframes(page):
+            iframes = page.eles('tag:iframe')
+            for iframe in iframes:
+                try:
+                    frame = iframe.frame()
+                except:
+                    continue
     
-            # 子 iframe 递归
-            try:
-                for sub in f.frames:
-                    if search_in(sub):
-                        return True
-            except:
-                pass
+                # 在当前 iframe 中搜索
+                if search_in(frame):
+                    return True
     
-        logger.warning("未找到签到按钮（可能在更深层 iframe 或 DOM 已变）")
+                # 递归子 iframe
+                if search_iframes(frame):
+                    return True
+    
+            return False
+    
+        # 执行 iframe 递归搜索
+        if search_iframes(self.page):
+            return True
+    
+        logger.warning("未找到签到按钮（可能在隐藏 iframe 或 DOM 结构已变）")
         return False
+
     
 
 
@@ -390,6 +402,7 @@ class NodeLocRunner:
     def run(self) -> bool:
         b = NodeLocBrowser()
         return b.run()
+
 
 
 
