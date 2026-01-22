@@ -142,30 +142,35 @@ class NodeLocBrowser:
         return False
 
     
+    
     def try_checkin(self) -> bool:
         logger.info("尝试执行签到...")
-        # 打开首页（或签到入口页）
-        self.page.get(BASE_URL + "/")
-        time.sleep(2.0)
     
-        # 规范化候选选择器：
-        # 1) 优先使用环境变量/默认值（已经在顶部设为：button.checkin-button...）
-        # 2) 再追加兜底选择器（尽量不要依赖 :has-text，部分环境兼容性不稳定）
+        # 进入首页（或签到入口）
+        self.page.get(BASE_URL + "/")
+        time.sleep(2)
+    
+        # ================
+        # 1) 构建候选选择器
+        # ================
         selectors: List[str] = []
+    
+        # 用户自定义 + 我们添加的默认值已经在顶部设置
         if CHECKIN_SELECTOR:
             selectors.extend([s.strip() for s in CHECKIN_SELECTOR.split(",") if s.strip()])
     
-        # 兜底候选（从“更精确”到“一般”）
+        # 强力 XPath（最稳定）
+        # 优先插在第一位
+        strong_xpath = '//button[contains(@class,"checkin-button")]'
+        if strong_xpath not in selectors:
+            selectors.insert(0, strong_xpath)
+    
+        # 兜底 CSS / 文本匹配
         fallback_selectors = [
-            # 你的真实按钮类名（再次兜底一次，防止用户覆盖后仍失败）
-            "button.checkin-button:not(.checked-in)",
-            "button.checkin-button",
-    
-            # 兼容一些主题的常见按钮位置
-            ".d-header .btn.checkin-button",
-            ".d-header button.btn",
-    
-            # 最后再试基于文本的选择器（某些引擎不支持 :has-text，放在最后）
+            "button.checkin-button:not(.checked-in)",   # 未签到
+            "button.checkin-button",                    # 已签到/未签到都可
+            '.d-header .btn.checkin-button',
+            '.d-header button.btn',
             'button:has-text("签到")', 'a:has-text("签到")',
             'button:has-text("打卡")', 'a:has-text("打卡")',
         ]
@@ -175,96 +180,103 @@ class NodeLocBrowser:
     
         logger.debug(f"签到按钮候选选择器：{selectors}")
     
-        # 工具函数：若命中的是 <svg>，则向上找到最近的 <button>/<a>
-        def _promote_to_clickable(ele):
+        # ============================
+        # 工具：如果点到 SVG，向上找 button
+        # ============================
+        def promote_to_button(ele):
+            """如果命中 svg，则向上找最近可点击的 <button>/<a>"""
             try:
                 tag = (getattr(ele, "tag", "") or "").lower()
-            except Exception:
+            except:
                 tag = ""
+    
             if tag == "svg":
+                logger.debug("命中 SVG，尝试向上寻找可点击的父级按钮...")
                 parent = ele.parent()
-                # 向上找可点击的 button / a
-                while parent and getattr(parent, "tag", None) and getattr(parent, "tag").lower() not in ("button", "a"):
+                while parent and getattr(parent, "tag", "").lower() not in ("button", "a"):
                     parent = parent.parent()
                 return parent or ele
             return ele
     
-        # 工具函数：判断是否“已签到”
-        def _is_checked_in(ele):
+        # ============================
+        # 工具：是否为“已签到”
+        # ============================
+        def is_checked_in(ele):
             try:
-                cls = (ele.attr("class") or "") if hasattr(ele, "attr") else (getattr(ele, "attrs", {}).get("class", "") if hasattr(ele, "attrs") else "")
-                # DrissionPage 的 .attr("class") 通常返回字符串；有些实现可能返回列表，做个兜底处理
+                cls = ele.attr("class") or ""
                 if isinstance(cls, list):
-                    classes = " ".join(cls)
-                else:
-                    classes = str(cls)
-                return "checked-in" in classes
-            except Exception:
+                    cls = " ".join(cls)
+                return "checked-in" in cls
+            except:
                 return False
     
+        # ============================
+        # 2) 逐个尝试候选选择器
+        # ============================
         for css in selectors:
             try:
                 ele = self.page.ele(css)
                 if not ele:
                     continue
     
-                # 如果元素就是“已签到”按钮，直接判定成功并返回
-                if _is_checked_in(ele):
-                    logger.success(f"已检测到签到完成（元素含 .checked-in）：{css}")
+                # 检查是否已签到
+                if is_checked_in(ele):
+                    logger.success(f"已签到（元素含有 checked-in）：{css}")
                     return True
     
-                # 命中 svg 时提升到可点击的父级
-                ele = _promote_to_clickable(ele)
+                # 若命中 SVG，则转为 button
+                ele = promote_to_button(ele)
     
-                # 再次检测（父级可能带有 .checked-in）
-                if _is_checked_in(ele):
-                    logger.success(f"已检测到签到完成（父级含 .checked-in）：{css}")
+                # 父级也可能有 checked-in
+                if is_checked_in(ele):
+                    logger.success(f"已签到（父级含 checked-in）：{css}")
                     return True
     
-                # 再做一次文本判定（如果引擎支持 .text）
-                text = ""
+                # 尝试拿文本（如果有）
                 try:
-                    text = (ele.text or "").strip()
-                except Exception:
-                    text = ""
-                if text and any(k in text for k in ("签到", "打卡", "签 到", "Check-in", "check in")):
-                    logger.info(f"发现疑似签到按钮：{css} / 文本：{text}，准备点击")
+                    txt = (ele.text or "").strip()
+                except:
+                    txt = ""
+                if txt:
+                    logger.info(f"找到可能的签到按钮（含文本）：{txt} / {css}")
     
-                # 点击
+                # ========== 点击 ==========
+                logger.info(f"点击签到按钮：{css}")
                 ele.click()
                 time.sleep(random.uniform(1.2, 2.2))
     
-                # 点击后再检查一次是否已变成“已签到”状态
+                # 点击后检查状态
                 try:
-                    # 页面可能动态变更，重新拿一次元素或其父级
-                    confirm_ele = self.page.ele("button.checkin-button") or ele
-                    if _is_checked_in(confirm_ele):
-                        logger.success("签到成功（点击后检测到已签到状态）")
+                    confirm = self.page.ele("button.checkin-button")
+                    if confirm and is_checked_in(confirm):
+                        logger.success("签到成功（点击后出现 checked-in）")
                         return True
-                except Exception:
+                except:
                     pass
     
-                # 有些站点会弹出提示或需要刷新状态，再给一次机会
-                time.sleep(0.8)
+                # 刷新后再次确认
                 self.page.refresh()
-                time.sleep(1.0)
-    
-                # 刷新后再检测一次“已签到”状态
+                time.sleep(1.2)
                 try:
-                    confirm_ele2 = self.page.ele("button.checkin-button")
-                    if confirm_ele2 and _is_checked_in(confirm_ele2):
-                        logger.success("签到成功（刷新后检测到已签到状态）")
+                    confirm2 = self.page.ele("button.checkin-button")
+                    if confirm2 and is_checked_in(confirm2):
+                        logger.success("签到成功（刷新后出现 checked-in）")
                         return True
-                except Exception:
+                except:
                     pass
     
-                logger.info(f"已点击可能的签到按钮：{css}，但未确认到已签到状态，将继续尝试其他候选")
-                # 不 return，继续试下一个候选
-            except Exception as e:
-                logger.debug(f"签到点击失败，尝试下一个：{css} | {e}")
+                logger.info(f"点击了可能的签到按钮，但未检测到状态变化：{css}")
+                # 不 return，继续试下一个选择器
     
-        logger.warning("未找到‘签到/打卡’按钮，请设置 CHECKIN_SELECTOR 精确匹配或检查页面结构")
+            except Exception as e:
+                logger.debug(f"尝试签到失败：{css} | {e}")
+    
+        # ============================
+        # 实在找不到
+        # ============================
+        logger.warning("未找到签到按钮，请设置 CHECKIN_SELECTOR 或检查页面结构")
         return False
+
 
 
 
@@ -407,6 +419,7 @@ class NodeLocRunner:
     def run(self) -> bool:
         b = NodeLocBrowser()
         return b.run()
+
 
 
 
