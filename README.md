@@ -1,4 +1,4 @@
-![CI](https://github.com/max10191211/nodeloc-auto-checkin/actions/workflows/checkin.yml/badge.svg)
+﻿![CI](https://github.com/max10191211/nodeloc-auto-checkin/actions/workflows/checkin.yml/badge.svg)
 
 # NodeLoc Auto Check-in
 自动签到 + 随机浏览/点赞 + 推送通知
