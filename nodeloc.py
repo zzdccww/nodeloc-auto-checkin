@@ -248,7 +248,7 @@ class NodeLocBrowser:
     
         logger.warning("未找到签到按钮（可能在更深层 iframe 或 DOM 已变）")
         return False
-    ``
+    
 
 
     def click_topics_and_browse(self) -> bool:
@@ -390,6 +390,7 @@ class NodeLocRunner:
     def run(self) -> bool:
         b = NodeLocBrowser()
         return b.run()
+
 
 
 
