@@ -147,118 +147,46 @@ class NodeLocBrowser:
     
     def try_checkin(self) -> bool:
         logger.info("尝试执行签到...")
+    
+        # 打开首页
         self.page.get(BASE_URL + "/")
         time.sleep(2)
+        selector = "li.checkin-icon button"
     
-        # 1) 构建选择器列表（XPath + CSS）
-        selectors = []
-        if CHECKIN_SELECTOR:
-            selectors.extend([s.strip() for s in CHECKIN_SELECTOR.split(",") if s.strip()])
-    
-        strong_xpath = '//button[contains(@class,"checkin-button")]'
-        if strong_xpath not in selectors:
-            selectors.insert(0, strong_xpath)
-    
-        fallback = [
-            "button.checkin-button:not(.checked-in)",
-            "button.checkin-button",
-            '.d-header .btn.checkin-button',
-            '.d-header button.btn',
-        ]
-        for css in fallback:
-            if css not in selectors:
-                selectors.append(css)
-    
-        logger.debug(f"签到按钮候选选择器：{selectors}")
-    
-        # 工具：svg → button
-        def promote(ele):
-            try:
-                if ele.tag.lower() == "svg":
-                    p = ele.parent()
-                    while p and p.tag.lower() not in ("button", "a"):
-                        p = p.parent()
-                    return p or ele
-            except:
-                pass
-            return ele
-    
-        # 工具：是否已签到
-        def is_checked_in(ele):
-            try:
-                cls = ele.attr("class") or ""
-                return "checked-in" in cls
-            except:
-                return False
-    
-        # 核心：在指定 page（主 DOM 或 iframe 内）搜索签到按钮
-        def search_in(page):
-            for css in selectors:
-                ele = None
-                try:
-                    ele = page.ele(css)
-                except:
-                    pass
-    
-                if not ele:
-                    continue
-    
-                ele = promote(ele)
-    
-                if is_checked_in(ele):
-                    logger.success("已签到（按钮含 checked-in）")
-                    return True
-    
-                logger.info(f"点击签到按钮：{css}")
-                try:
-                    ele.click()
-                    time.sleep(2)
-                except Exception as e:
-                    logger.debug(f"点击失败：{e}")
-                    continue
-    
-                # 再检查是否状态变化
-                try:
-                    after = page.ele("button.checkin-button")
-                    if after and is_checked_in(after):
-                        logger.success("签到成功（点击后检测到 checked-in）")
-                        return True
-                except:
-                    pass
-    
+        # 查找签到按钮
+        btn = self.page.ele(selector)
+        if not btn:
+            logger.warning(f"找不到签到按钮：{selector}")
             return False
     
-        # 2）首先在主 DOM 查找
-        if search_in(self.page):
+        # 判断是否已签到
+        cls = btn.attr("class") or ""
+        if "checked-in" in cls:
+            logger.success("今日已签到（按钮含 checked-in）")
             return True
     
-        logger.info("主 DOM 未找到，开始扫描 iframe...")
-    
-        # 3）遍历 iframe（DrissionPage 正确写法）
-        def search_iframes(page):
-            iframes = page.eles('tag:iframe')
-            for iframe in iframes:
-                try:
-                    frame = iframe.frame()
-                except:
-                    continue
-    
-                # 在当前 iframe 中搜索
-                if search_in(frame):
-                    return True
-    
-                # 递归子 iframe
-                if search_iframes(frame):
-                    return True
-    
+        # 执行签到点击
+        try:
+            btn.click()
+            time.sleep(2)
+        except Exception as e:
+            logger.error(f"签到按钮点击失败: {e}")
             return False
     
-        # 执行 iframe 递归搜索
-        if search_iframes(self.page):
-            return True
+        # 再次确认签到状态
+        try:
+            btn2 = self.page.ele(selector)
+            cls2 = btn2.attr("class") if btn2 else ""
+            if btn2 and "checked-in" in cls2:
+                logger.success("签到成功（按钮状态变为 checked-in）")
+                return True
+        except Exception:
+            pass
     
-        logger.warning("未找到签到按钮（可能在隐藏 iframe 或 DOM 结构已变）")
+        logger.warning("尝试点击签到按钮后仍未检测到签到成功")
         return False
+
+
 
     
 
@@ -402,6 +330,7 @@ class NodeLocRunner:
     def run(self) -> bool:
         b = NodeLocBrowser()
         return b.run()
+
 
 
 
