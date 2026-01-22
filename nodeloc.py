@@ -26,7 +26,12 @@ BROWSE_ENABLED = os.environ.get("BROWSE_ENABLED", "true").strip().lower() not in
 HEADLESS = os.environ.get("HEADLESS", "true").strip().lower() not in ["false","0","off"]
 LIKE_PROB = float(os.environ.get("LIKE_PROB", "0.3"))
 CLICK_COUNT = int(os.environ.get("CLICK_COUNT", "10"))
-CHECKIN_SELECTOR = os.environ.get("CHECKIN_SELECTOR", "").strip()
+
+# 默认签到按钮选择器（优先未签到按钮，再兜底任意签到按钮）
+DEFAULT_CHECKIN_SELECTORS = "button.checkin-button:not(.checked-in),button.checkin-button"
+
+CHECKIN_SELECTOR = os.environ.get("CHECKIN_SELECTOR", DEFAULT_CHECKIN_SELECTORS).strip()
+
 
 GOTIFY_URL = os.environ.get("GOTIFY_URL")
 GOTIFY_TOKEN = os.environ.get("GOTIFY_TOKEN")
@@ -311,3 +316,4 @@ class NodeLocRunner:
     def run(self) -> bool:
         b = NodeLocBrowser()
         return b.run()
+
