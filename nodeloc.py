@@ -4,12 +4,13 @@ import os
 import re
 import time
 import random
-from typing import List
+from typing import List, Optional
 
 from loguru import logger
 from curl_cffi import requests
 from bs4 import BeautifulSoup
 from DrissionPage import ChromiumOptions, Chromium
+from DrissionPage.errors import BrowserConnectError
 from tabulate import tabulate
 
 from utils import retry
@@ -26,6 +27,8 @@ NL_COOKIE = os.environ.get("NL_COOKIE", "").strip()
 
 BROWSE_ENABLED = os.environ.get("BROWSE_ENABLED", "true").strip().lower() not in ["false", "0", "off"]
 HEADLESS = os.environ.get("HEADLESS", "true").strip().lower() not in ["false", "0", "off"]
+# 可选：允许通过环境变量切换无头风格（new/old/auto），默认 new
+HEADLESS_VARIANT = os.environ.get("HEADLESS_VARIANT", "new").strip().lower()
 LIKE_PROB = float(os.environ.get("LIKE_PROB", "0.3"))
 CLICK_COUNT = int(os.environ.get("CLICK_COUNT", "10"))
 
@@ -43,6 +46,68 @@ SC3_PUSH_KEY = os.environ.get("SC3_PUSH_KEY")
 # ----------------------------------------------------
 
 
+def _detect_chrome_path() -> Optional[str]:
+    """在常见路径中寻找 Chromium/Chrome 二进制；优先用 CHROME_PATH。"""
+    env_path = os.environ.get("CHROME_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    candidates = [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/opt/google/chrome/chrome",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _make_chromium(headless: bool, headless_variant: str = "new") -> Chromium:
+    """
+    创建稳定的 Chromium：
+    - auto_port(True)：避免固定 9222 端口冲突与用户目录冲突
+    - 容器友好参数：--no-sandbox / --disable-dev-shm-usage / --disable-gpu 等
+    - headless_variant: "new" 或 "old"
+    """
+    co = ChromiumOptions(read_file=False)
+
+    # 自动分配端口 + 独立临时用户目录
+    co.auto_port(True)
+
+    # 指定浏览器路径（优先环境变量）
+    chrome_path = _detect_chrome_path()
+    if chrome_path:
+        co.set_browser_path(chrome_path)
+
+    # 容器/Linux 常用稳定参数
+    co.set_argument("--no-sandbox")
+    co.set_argument("--disable-dev-shm-usage")
+    co.set_argument("--disable-gpu")
+    co.set_argument("--disable-software-rasterizer")
+    co.set_argument("--disable-extensions")
+    co.set_argument("--mute-audio")
+    co.set_argument("--window-size", "1920,1080")
+    co.set_tmp_path("/tmp/DrissionPage")
+    co.incognito(True)
+    co.set_timeouts(page_load=30)
+
+    # 无头模式（显式控制 new/old）
+    if headless:
+        if headless_variant == "new":
+            co.set_argument("--headless", "new")
+        elif headless_variant == "old":
+            co.set_argument("--headless", "old")
+        else:
+            co.set_argument("--headless", "new")
+
+    # 桌面渲染/反自动化检测的原有参数（保留你的设置）
+    co.set_argument("--disable-blink-features=AutomationControlled")
+    co.set_argument("--disable-features=IsolateOrigins,site-per-process")
+
+    return Chromium(co)
+
+
 class NodeLocBrowser:
     def __init__(self) -> None:
         # HTTP 会话（curl_cffi）
@@ -57,21 +122,17 @@ class NodeLocBrowser:
             "Accept-Language": "zh-CN,zh;q=0.9",
         })
 
-        # ---------- Desktop 渲染关键配置 ----------
-        co = ChromiumOptions()
-        co.set_argument("--disable-blink-features=AutomationControlled")
-        co.set_argument("--disable-features=IsolateOrigins,site-per-process")
-        co.set_argument("--disable-extensions")
-        co.set_argument("--window-size=1400,900")
-        co.headless(HEADLESS)
+        # ---------- 稳健启动 Chromium ----------
+        try:
+            variant = HEADLESS_VARIANT or "new"
+            self.browser = _make_chromium(HEADLESS, variant)
+        except BrowserConnectError:
+            if HEADLESS and (HEADLESS_VARIANT in ("", "new", "auto")):
+                # 少量环境/版本对 old 更友好，自动回退一次
+                self.browser = _make_chromium(True, "old")
+            else:
+                raise
 
-        # 常规稳定性
-        co.incognito(True)
-        co.set_argument("--no-sandbox")
-        co.set_argument("--disable-dev-shm-usage")
-        # ----------------------------------------
-
-        self.browser = Chromium(co)
         self.page = self.browser.new_tab()
 
     # ------------------ Cookie/Login ------------------
@@ -80,6 +141,7 @@ class NodeLocBrowser:
             self.session.cookies.set(k, v, domain=self._cookie_domain())
         dp_cookies = [{"name": k, "value": v, "domain": self._cookie_domain(), "path": "/"}
                       for k, v in cookie_dict.items()]
+        # DrissionPage 的 set.cookies 接口
         self.page.set.cookies(dp_cookies)
 
     def _cookie_domain(self) -> str:
@@ -151,7 +213,8 @@ class NodeLocBrowser:
             return False
 
     def _verify_logged_in(self) -> bool:
-        user_ele = self.page.ele("css=@id=current-user") or self.page.ele("@id=current-user")
+        # 优先标准 CSS 写法
+        user_ele = self.page.ele("css=#current-user") or self.page.ele("@id=current-user")
         if user_ele:
             logger.info("登录验证成功（current-user）")
             return True
@@ -332,7 +395,9 @@ class NodeLocBrowser:
             page.run_js(f"window.scrollBy(0, {dist})")
             time.sleep(random.uniform(1.8, 3.5))
 
-            at_bottom = page.run_js("window.scrollY + window.innerHeight >= document.body.scrollHeight")
+            at_bottom = page.run_js(
+                "return window.scrollY + window.innerHeight >= document.body.scrollHeight;"
+            )
             cur = page.url
 
             if cur != prev_url:
