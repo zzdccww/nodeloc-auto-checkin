@@ -64,6 +64,16 @@ def _detect_chrome_path() -> Optional[str]:
     return None
 
 
+def _split_host(base_url: str) -> str:
+    """从 URL 中提取 host（可能带 www.）"""
+    return base_url.split("://", 1)[-1].split("/", 1)[0]
+
+
+def _root_domain(host: str) -> str:
+    """去掉 www. 前缀得到主域"""
+    return host[4:] if host.startswith("www.") else host
+
+
 def _make_chromium(headless: bool, headless_variant: str = "new") -> Chromium:
     """
     创建稳定的 Chromium：
@@ -113,6 +123,10 @@ class NodeLocBrowser:
     def __init__(self) -> None:
         logger.info(f"Using BASE_URL: {BASE_URL}")
 
+        # 登录账号格式提示
+        if USERNAME and ("@" not in USERNAME):
+            logger.warning(f"当前 NODELOC_USERNAME='{USERNAME}' 看起来不是邮箱。大多数站点推荐使用邮箱登录。")
+
         # HTTP 会话（curl_cffi）
         self.session = requests.Session()
         self.session.headers.update({
@@ -140,34 +154,75 @@ class NodeLocBrowser:
 
     # ------------------ Cookie/Login ------------------
     def set_cookies_to_both(self, cookie_dict: dict):
-        for k, v in cookie_dict.items():
-            self.session.cookies.set(k, v, domain=self._cookie_domain())
-        dp_cookies = [{"name": k, "value": v, "domain": self._cookie_domain(), "path": "/"}
-                      for k, v in cookie_dict.items()]
-        # DrissionPage 的 set.cookies 接口
-        self.page.set.cookies(dp_cookies)
+        """同时写入主域与 www 子域，避免域名切换导致的会话不一致。"""
+        host = _split_host(BASE_URL)
+        root = _root_domain(host)
 
-    def _cookie_domain(self) -> str:
-        host = BASE_URL.split("://", 1)[-1].split("/", 1)[0]
-        if host.startswith("www."):
-            host = host[4:]
-        return f".{host}"
+        # 写入 requests 会话 Cookie（主域 + 可能的 www 子域）
+        for k, v in cookie_dict.items():
+            # 主域
+            self.session.cookies.set(k, v, domain=f".{root}", path="/")
+            # 带 www 的子域（若当前使用 www）
+            if host.startswith("www."):
+                self.session.cookies.set(k, v, domain=f".www.{root}", path="/")
+
+        # 写入浏览器端 Cookie
+        dp_cookies = []
+        for k, v in cookie_dict.items():
+            dp_cookies.append({"name": k, "value": v, "domain": f".{root}", "path": "/"})
+            if host.startswith("www."):
+                dp_cookies.append({"name": k, "value": v, "domain": f".www.{root}", "path": "/"})
+
+        if dp_cookies:
+            self.page.set.cookies(dp_cookies)
 
     def _parse_cookie_str(self, cookie_str: str) -> dict:
         pairs = [kv.strip() for kv in cookie_str.split(";") if "=" in kv]
         return {kv.split("=", 1)[0].strip(): kv.split("=", 1)[1].strip() for kv in pairs}
 
     def _server_current_user(self) -> str:
-        """服务端获取当前登录用户名（尽量不依赖前端），优先 /u 解析 data-user-card。"""
+        """服务端获取当前登录用户名。优先 /session/current.json，降级 /u。"""
+        # 1) 标准接口（Discourse）
         try:
-            r = self.session.get(f"{BASE_URL}/u", impersonate="chrome136", timeout=10)
+            r = self.session.get(f"{BASE_URL}/session/current.json", impersonate="chrome136", timeout=10)
             if r.status_code == 200:
-                m = re.search(r'data-user-card="([^"]+)"', r.text or "")
+                j = r.json()
+                cu = (j.get("current_user") or {})
+                name = cu.get("username") or cu.get("name") or ""
+                if name:
+                    return name
+        except Exception:
+            pass
+
+        # 2) 降级：解析 /u 页面 data-user-card
+        try:
+            r1 = self.session.get(f"{BASE_URL}/u", impersonate="chrome136", timeout=10)
+            if r1.status_code == 200:
+                m = re.search(r'data-user-card="([^"]+)"', r1.text or "")
                 if m:
                     return m.group(1)
         except Exception:
             pass
         return ""
+
+    def _post_login_consistency_check(self, phase: str):
+        """登录或关键操作后，服务端 + DOM 双确认当前账号。"""
+        # 服务器侧
+        server_user = self._server_current_user()
+
+        # DOM 侧（首页当前用户菜单）
+        try:
+            self.page.get(BASE_URL + "/")
+            time.sleep(1.2)
+            dom_el = self.page.ele("css=#current-user a[data-user-card]")
+            dom_user = dom_el.attr("data-user-card") if dom_el else ""
+        except Exception:
+            dom_user = ""
+
+        logger.info(f"[{phase}] server current user = {server_user or '未知'}; dom current user = {dom_user or '未知'}")
+
+        if not (server_user or dom_user):
+            logger.warning(f"[{phase}] 无法确认当前账号（服务端与 DOM 都未知）。请检查 BASE_URL / Cookie / 站点风控。")
 
     def login_via_cookie(self) -> bool:
         logger.info("尝试使用 NL_COOKIE 登录...")
@@ -181,8 +236,7 @@ class NodeLocBrowser:
             time.sleep(3)
             ok = self._verify_logged_in()
             if ok:
-                who = self._server_current_user()
-                logger.info(f"[after-login(cookie)] server current user = {who or '未知'}")
+                self._post_login_consistency_check("after-login(cookie)")
             return ok
         except Exception as e:
             logger.error(f"Cookie 登录异常: {e}")
@@ -227,8 +281,7 @@ class NodeLocBrowser:
             self.page.get(BASE_URL + "/")
             time.sleep(4)
             ok = self._verify_logged_in()
-            who = self._server_current_user()
-            logger.info(f"[after-login(password)] server current user = {who or '未知'}")
+            self._post_login_consistency_check("after-login(password)")
             return ok
         except Exception as e:
             logger.error(f"密码登录异常: {e}")
@@ -255,14 +308,13 @@ class NodeLocBrowser:
         self.page.get(BASE_URL + "/")
         time.sleep(3)
 
-        # whoami（从 DOM 读取当前用户）
+        # whoami（从 DOM 读取“当前登录用户”菜单）
         try:
-            me = self.page.ele("css=div.directory-table__row.me a[data-user-card]") \
-                 or self.page.ele("css=a[data-user-card]")
+            me = self.page.ele("css=#current-user a[data-user-card]")
             uname = me.attr("data-user-card") if me else ""
-            logger.info(f"[whoami] 当前页面用户：{uname or '未知'}  @ {BASE_URL}")
+            logger.info(f"[whoami(dom)] 当前登录用户：{uname or '未知'}  @ {BASE_URL}")
         except Exception:
-            pass
+            uname = ""
 
         # 打印浏览器内 Cookie（域/路径/关键名）
         try:
@@ -337,10 +389,9 @@ class NodeLocBrowser:
 
             if _checked(btn):
                 logger.success("今日已签到（checked-in / 文案提示）")
-                # --------- 增强校验：服务端 + UI 双确认 ----------
+                # --------- 增强校验：服务端 + DOM 双确认 ----------
                 logger.info(server_side_verify(self.session, BASE_URL))
-                who2 = self._server_current_user()
-                logger.info(f"[after-checkin] server current user = {who2 or '未知'}")
+                self._post_login_consistency_check("after-checkin")
 
                 # 刷新首页再次确认按钮状态
                 self.page.get(BASE_URL + "/")
@@ -374,10 +425,9 @@ class NodeLocBrowser:
             btn2 = self.page.ele(f"css={sel}")
             if btn2 and _checked(btn2):
                 logger.success("签到成功（状态/文案已更新）")
-                # --------- 增强校验：服务端 + UI 双确认 ----------
+                # --------- 增强校验：服务端 + DOM 双确认 ----------
                 logger.info(server_side_verify(self.session, BASE_URL))
-                who2 = self._server_current_user()
-                logger.info(f"[after-checkin] server current user = {who2 or '未知'}")
+                self._post_login_consistency_check("after-checkin")
 
                 self.page.get(BASE_URL + "/")
                 time.sleep(2)
@@ -575,3 +625,4 @@ class NodeLocRunner:
     def run(self) -> bool:
         b = NodeLocBrowser()
         return b.run()
+
