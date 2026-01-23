@@ -29,7 +29,7 @@ HEADLESS = os.environ.get("HEADLESS", "true").strip().lower() not in ["false", "
 LIKE_PROB = float(os.environ.get("LIKE_PROB", "0.3"))
 CLICK_COUNT = int(os.environ.get("CLICK_COUNT", "10"))
 
-# 默认签到按钮选择器：优先使用你给出的精准选择器
+# 默认签到按钮选择器：优先你提供的精准结构，其次兜底
 DEFAULT_CHECKIN_SELECTORS = (
     "li.header-dropdown-toggle.checkin-icon button.checkin-button,"
     "button.checkin-button:not(.checked-in),"
@@ -57,24 +57,19 @@ class NodeLocBrowser:
             "Accept-Language": "zh-CN,zh;q=0.9",
         })
 
-        # ---------------- 正式修复 Desktop 渲染关键配置 ----------------
+        # ---------- Desktop 渲染关键配置 ----------
         co = ChromiumOptions()
-
-        # 强制 Desktop 用户环境
         co.set_argument("--disable-blink-features=AutomationControlled")
         co.set_argument("--disable-features=IsolateOrigins,site-per-process")
         co.set_argument("--disable-extensions")
         co.set_argument("--window-size=1400,900")
-
-        # headless 视图在 mobile 模式下渲染不全，此模式必须保持 false 才能看到签到按钮
         co.headless(HEADLESS)
 
-        # 常规配置
+        # 常规稳定性
         co.incognito(True)
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-dev-shm-usage")
-
-        # --------------------------------------------------------------
+        # ----------------------------------------
 
         self.browser = Chromium(co)
         self.page = self.browser.new_tab()
@@ -168,7 +163,7 @@ class NodeLocBrowser:
         return False
     # ----------------------------------------------------
 
-    # ------------------ 签到（最终 Desktop 版） ------------------
+    # ------------------ 签到（Desktop 版） ------------------
     def try_checkin(self) -> bool:
         logger.info("尝试执行签到...")
 
@@ -181,7 +176,7 @@ class NodeLocBrowser:
         except:
             logger.warning("顶部导航栏未完全渲染，可能导致找不到签到按钮")
 
-        # 签到按钮选择器
+        # 精准按钮选择器（可通过 env CHECKIN_SELECTOR 覆盖）
         selectors = [s.strip() for s in CHECKIN_SELECTOR.split(",") if s.strip()]
         precise = "li.header-dropdown-toggle.checkin-icon button.checkin-button"
         if precise not in selectors:
@@ -190,9 +185,14 @@ class NodeLocBrowser:
         logger.debug(f"签到按钮候选：{selectors}")
 
         def _checked(ele):
+            """更稳的已签到判断：class 或 文案（title/aria-label）"""
             try:
                 cls = ele.attr("class") or ""
-                return "checked-in" in cls or bool(ele.attr("disabled"))
+                title = (ele.attr("title") or "") + " " + (ele.attr("aria-label") or "")
+                return (
+                    "checked-in" in cls
+                    or ("已签" in title)  # 如“您今天已经签到过了”
+                )
             except:
                 return False
 
@@ -203,7 +203,7 @@ class NodeLocBrowser:
                 continue
 
             if _checked(btn):
-                logger.success("今日已签到（checked-in）")
+                logger.success("今日已签到（checked-in / 文案提示）")
                 return True
 
             # 点击签到
@@ -218,10 +218,10 @@ class NodeLocBrowser:
 
             time.sleep(2)
 
-            # 确认签到
+            # 二次确认（class 或 文案变化）
             btn2 = self.page.ele(sel)
             if btn2 and _checked(btn2):
-                logger.success("签到成功（checked-in）")
+                logger.success("签到成功（状态/文案已更新）")
                 return True
 
         logger.warning("未找到签到按钮或未确认到成功")
@@ -267,14 +267,13 @@ class NodeLocBrowser:
             page.run_js(f"window.scrollBy(0, {dist})")
             time.sleep(random.uniform(1.8, 3.5))
 
+        # 简化滚动退出逻辑
             at_bottom = page.run_js("window.scrollY + window.innerHeight >= document.body.scrollHeight")
             cur = page.url
-
             if cur != prev_url:
                 prev_url = cur
             elif at_bottom and prev_url == cur:
                 break
-
             if random.random() < 0.07:
                 break
 
