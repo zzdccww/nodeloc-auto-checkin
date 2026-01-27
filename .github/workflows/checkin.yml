@@ -19,21 +19,21 @@ jobs:
     timeout-minutes: 30
     env:
       TZ: Asia/Shanghai
-      NODELOC_BASE_URL: ${{ github.event.inputs.nodeloc_base_url || secrets.NODELOC_BASE_URL || '' }}
-      NL_COOKIE:        ${{ github.event.inputs.nl_cookie       || secrets.NL_COOKIE        || '' }}
-      NODELOC_USERNAME: ${{ github.event.inputs.username        || secrets.NODELOC_USERNAME || '' }}
-      NODELOC_PASSWORD: ${{ github.event.inputs.password        || secrets.NODELOC_PASSWORD || '' }}
-      BROWSE_ENABLED:   ${{ github.event.inputs.browse_enabled  || vars.BROWSE_ENABLED      || 'true' }}
-      LIKE_PROB:        ${{ github.event.inputs.like_prob       || vars.LIKE_PROB           || '0.3' }}
-      CLICK_COUNT:      ${{ github.event.inputs.click_count     || vars.CLICK_COUNT         || '10' }}
-      HEADLESS:         ${{ github.event.inputs.headless        || vars.HEADLESS            || 'true' }}
-      CHECKIN_SELECTOR: ${{ github.event.inputs.checkin_selector|| vars.CHECKIN_SELECTOR    || 'li.header-dropdown-toggle.checkin-icon button.checkin-button' }}
+      NODELOC_BASE_URL: ${{ secrets.NODELOC_BASE_URL || '' }}
+      NL_COOKIE:        ${{ secrets.NL_COOKIE        || '' }}
+      NODELOC_USERNAME: ${{ secrets.NODELOC_USERNAME || '' }}
+      NODELOC_PASSWORD: ${{ secrets.NODELOC_PASSWORD || '' }}
+      BROWSE_ENABLED:   ${{ vars.BROWSE_ENABLED      || 'true' }}
+      LIKE_PROB:        ${{ vars.LIKE_PROB           || '0.3' }}
+      CLICK_COUNT:      ${{ vars.CLICK_COUNT         || '10' }}
+      HEADLESS:         ${{ vars.HEADLESS            || 'true' }}
+      CHECKIN_SELECTOR: ${{ vars.CHECKIN_SELECTOR    || 'li.header-dropdown-toggle.checkin-icon button.checkin-button' }}
       GOTIFY_URL:       ${{ secrets.GOTIFY_URL }}
       GOTIFY_TOKEN:     ${{ secrets.GOTIFY_TOKEN }}
       SC3_PUSH_KEY:     ${{ secrets.SC3_PUSH_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-      DEBUG_ARTIFACTS:  ${{ github.event.inputs.debug_artifacts || 'false' }}
+      DEBUG_ARTIFACTS:  ${{ vars.DEBUG_ARTIFACTS || 'false' }}
 
     steps:
       - name: Checkout
