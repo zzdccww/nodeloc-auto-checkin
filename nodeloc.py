@@ -44,6 +44,8 @@ CHECKIN_SELECTOR = os.environ.get("CHECKIN_SELECTOR", DEFAULT_CHECKIN_SELECTORS)
 GOTIFY_URL = os.environ.get("GOTIFY_URL")
 GOTIFY_TOKEN = os.environ.get("GOTIFY_TOKEN")
 SC3_PUSH_KEY = os.environ.get("SC3_PUSH_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 # ----------------------------------------------------
 
 
@@ -607,6 +609,18 @@ class NodeLocBrowser:
                         break
                     except Exception:
                         time.sleep(random.randint(120, 240))
+
+        # Telegram
+        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            try:
+                tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                params = {
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": f"NODELOC\n\n{status}",
+                }
+                requests.get(tg_url, params=params, timeout=10)
+            except Exception:
+                pass
     # ----------------------------------------------------
 
     # ------------------ 入口 ------------------
