@@ -367,8 +367,8 @@ class NodeLocBrowser:
         selectors = [
             "li.header-dropdown-toggle.checkin-icon button.checkin-button",  # 你的 DOM
             "li.checkin-icon button.checkin-button",                         # 略宽松
-            'button.checkin-button[title*="签到"]',                          # 利用 title 文案
-            'button.checkin-button[aria-label*="签到"]',                     # 利用 aria-label 文案
+            "button[title='每日签到']",                          # 利用 title 文案
+            "button[aria-label='每日签到']",                     # 利用 aria-label 文案
         ]
         # 允许通过环境变量覆盖/追加
         env_sel = [s.strip() for s in (CHECKIN_SELECTOR or "").split(",") if s.strip()]
@@ -663,3 +663,4 @@ class NodeLocRunner:
     def run(self) -> bool:
         b = NodeLocBrowser()
         return b.run()
+
