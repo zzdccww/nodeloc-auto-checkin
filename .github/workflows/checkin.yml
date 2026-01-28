@@ -4,7 +4,7 @@ name: NodeLoc Check-in
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"  # 每 6 小时（UTC）
+    - cron: "0 */23 * * *"  # 每 6 小时（UTC）
 
 permissions:
   contents: read
