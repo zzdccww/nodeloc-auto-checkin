@@ -1,0 +1,136 @@
+name: NodeLoc Auto Sign-in
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 每天 08:00 UTC 运行，可按需修改
+    - cron: '0 8 * * *'
+
+# 环境变量配置
+env:
+  # Telegram 推送配置（可选）
+  TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+  TG_USER_ID: ${{ secrets.TG_USER_ID }}
+  # Gotify 推送配置（可选）
+  GOTIFY_URL: ${{ secrets.GOTIFY_URL }}
+  GOTIFY_TOKEN: ${{ secrets.GOTIFY_TOKEN }}
+  # 浏览功能配置（可选）
+  BROWSE_ENABLED: ${{ vars.BROWSE_ENABLED || 'true' }}
+  LIKE_PROB: ${{ vars.LIKE_PROB || '0.3' }}
+  CLICK_COUNT: ${{ vars.CLICK_COUNT || '10' }}
+
+jobs:
+  signin:
+    runs-on: ubuntu-latest
+
+    # 指定工作目录为 nodeloc 子文件夹
+    defaults:
+      run:
+        working-directory: nodeloc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install system packages
+        working-directory: .
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            wget gnupg ca-certificates unzip fonts-liberation \
+            libatk1.0-0 libatk-bridge2.0-0 libcups2 libdbus-1-3 libexpat1 \
+            libfontconfig1 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 \
+            libpango-1.0-0 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 \
+            libxdamage1 libxext6 libxfixes3 libxi6 libxinerama1 libxrandr2 libxrender1 \
+            libxss1 libxtst6 lsb-release xdg-utils || true
+
+      - name: Install Google Chrome (stable)
+        working-directory: .
+        run: |
+          set -euo pipefail
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add - || true
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update || true
+          sudo apt-get install -y --no-install-recommends google-chrome-stable || true
+
+      - name: Install matching ChromeDriver
+        working-directory: .
+        run: |
+          set -euo pipefail
+
+          # 检测系统上的 chrome/chromium 版本
+          if command -v google-chrome >/dev/null 2>&1; then
+            CHROME_FULL_VER=$(google-chrome --version | sed -E 's/.* ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          elif command -v chromium-browser >/dev/null 2>&1; then
+            CHROME_FULL_VER=$(chromium-browser --version | sed -E 's/.* ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          elif command -v chromium >/dev/null 2>&1; then
+            CHROME_FULL_VER=$(chromium --version | sed -E 's/.* ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          else
+            echo "No chrome/chromium binary found"
+            exit 1
+          fi
+
+          echo "Detected Chrome version: $CHROME_FULL_VER"
+          CHROME_MAJOR=$(echo "$CHROME_FULL_VER" | cut -d. -f1)
+          echo "Chrome major: $CHROME_MAJOR"
+
+          # 查询 chromedriver 版本
+          LATEST_URL="https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR}"
+          echo "Querying $LATEST_URL"
+          LATEST=$(curl -fsS "$LATEST_URL" || true)
+
+          if ! echo "${LATEST}" | grep -E -q '^[0-9]+(\.[0-9]+)*$'; then
+            echo "LATEST_RELEASE_${CHROME_MAJOR} returned unexpected content, fallback to global LATEST_RELEASE"
+            LATEST=$(curl -fsS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE" || true)
+          fi
+
+          if ! echo "${LATEST}" | grep -E -q '^[0-9]+(\.[0-9]+)*$'; then
+            echo "Failed to determine a valid chromedriver version (got: '${LATEST}'). Aborting."
+            echo "Response content (truncated):"
+            echo "${LATEST}" | sed -n '1,50p'
+            exit 1
+          fi
+
+          echo "Using chromedriver version: $LATEST"
+
+          # 下载并安装 chromedriver
+          CHROMEDRIVER_ZIP="chromedriver_linux64.zip"
+          DOWNLOAD_URL="https://chromedriver.storage.googleapis.com/${LATEST}/chromedriver_linux64.zip"
+          echo "Downloading $DOWNLOAD_URL"
+          curl -fsS -o "$CHROMEDRIVER_ZIP" "$DOWNLOAD_URL"
+          unzip -q "$CHROMEDRIVER_ZIP"
+          sudo mv -f chromedriver /usr/local/bin/chromedriver
+          sudo chmod +x /usr/local/bin/chromedriver
+          rm -f "$CHROMEDRIVER_ZIP"
+
+          echo "Installed chromedriver:"
+          chromedriver --version || true
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          # 注意：这里路径改为 nodeloc/requirements.txt
+          key: ${{ runner.os }}-pip-${{ hashFiles('nodeloc/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # 工作目录已设为 nodeloc，直接引用 requirements.txt
+          pip install -r requirements.txt
+
+      - name: Run NodeLoc sign-in
+        env:
+          NL_COOKIE: ${{ secrets.NL_COOKIE }}
+        run: |
+          set -euo pipefail
+          python main.py
