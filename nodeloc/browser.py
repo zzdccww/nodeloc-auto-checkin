@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
+import os
 import logging
 import undetected_chromedriver as uc
 
 log = logging.getLogger(__name__)
+
+# 从环境变量获取 Chrome 可执行文件路径（可选）
+CHROME_EXECUTABLE_PATH = os.environ.get("CHROME_EXECUTABLE_PATH", None)
 
 
 def create_browser(headless: bool = True):
@@ -30,7 +34,11 @@ def create_browser(headless: bool = True):
     )
 
     try:
-        driver = uc.Chrome(options=options)
+        # 如果指定了 Chrome 路径，则使用指定的路径
+        if CHROME_EXECUTABLE_PATH:
+            driver = uc.Chrome(options=options, browser_executable_path=CHROME_EXECUTABLE_PATH)
+        else:
+            driver = uc.Chrome(options=options)
         driver.set_window_size(1920, 1080)
 
         # 反自动化基础伪装
